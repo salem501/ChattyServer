@@ -13,51 +13,65 @@ public class Main {
 
     static final Set<SocketChannel> clients = new HashSet<>();
 
-    public static void main(String[] args) {
-        try (Selector selector = Selector.open();
-             ServerSocketChannel serverSocketChannel = ServerSocketChannel.open()) {
-            serverSocketChannel.bind(new InetSocketAddress(hostname, PORT));
-            serverSocketChannel.configureBlocking(false);
-            serverSocketChannel.register(selector, SelectionKey.OP_ACCEPT);
+    public static void main(String[] args) throws IOException {
+        Selector selector = Selector.open();
+        ServerSocketChannel serverSocketChannel = ServerSocketChannel.open();
+        serverSocketChannel.bind(new InetSocketAddress(hostname, PORT));
+        serverSocketChannel.configureBlocking(false);
+        serverSocketChannel.register(selector, SelectionKey.OP_ACCEPT);
 
-            while (true) {
-                selector.select();
-                Set<SelectionKey> selectionKeys = selector.selectedKeys();
-                Iterator<SelectionKey> iterator = selectionKeys.iterator();
-                while (iterator.hasNext()) {
-                    SelectionKey selectionKey = iterator.next();
-
-                    if (selectionKey.isAcceptable()) {
-                        SocketChannel client = serverSocketChannel.accept();
-                        System.out.println(client);
-                        client.configureBlocking(false);
-                        client.register(selector, SelectionKey.OP_READ);
-                        System.out.println("Accepted connection from: " + client.getRemoteAddress());
-                        clients.add(client);
-                    }
-                    if (selectionKey.isReadable()) {
-                        ByteBuffer buffer = ByteBuffer.allocate(256);
-                        SocketChannel client = (SocketChannel) selectionKey.channel();
-
-                        client.read(buffer);
-                        for (SocketChannel clientChannel : clients) {
-                            if (clientChannel != client) {
-                                buffer.rewind();
-                                clientChannel.write(buffer);
-                            }
-                        }
-
-                        buffer.flip();  // Switch the buffer from writing to reading mode
-                        byte[] data = new byte[buffer.remaining()];
-                        buffer.get(data);  // Copy data from buffer into the byte array
-                        System.out.println("Received: " + new String(data).trim());
-                        buffer.clear();
-                    }
+        while (true) {
+            selector.select();
+            Set<SelectionKey> selectionKeys = selector.selectedKeys();
+            for (SelectionKey selectionKey : selectionKeys) {
+                if (selectionKey.isAcceptable()) {
+                    handleAccept(serverSocketChannel, selector);
                 }
-                selectionKeys.clear();
+                if (selectionKey.isReadable()) {
+                    handleRead(selectionKey);
+                }
             }
-        } catch (IOException e) {
-            System.out.println(e.getMessage());
+            selectionKeys.clear();
         }
     }
+
+    private static void handleAccept(ServerSocketChannel serverSocketChannel, Selector selector) throws IOException {
+        SocketChannel client = serverSocketChannel.accept();
+        System.out.println(client);
+        client.configureBlocking(false);
+        client.register(selector, SelectionKey.OP_READ);
+        System.out.println("Accepted connection from: " + client.getRemoteAddress());
+        clients.add(client);
+    }
+
+    private static void handleRead(SelectionKey selectionKey) {
+        SocketChannel client = (SocketChannel) selectionKey.channel();
+        ByteBuffer buffer = ByteBuffer.allocate(256);
+
+        try {
+            client.read(buffer);
+            buffer.flip();
+            byte[] data = new byte[buffer.remaining()];
+            buffer.get(data);
+            System.out.println("Received: " + new String(data).trim());
+
+            for (SocketChannel otherClient : clients) {
+                if (otherClient != client) {
+                    buffer.rewind();
+                    otherClient.write(buffer);
+                }
+            }
+            buffer.clear();
+        } catch (IOException e) {
+            System.out.println("Client disconnected");
+            try {
+                buffer.clear();
+                clients.remove(client);
+                client.close();
+            } catch (IOException ex) {
+                ex.printStackTrace();
+            }
+        }
+    }
+
 }
